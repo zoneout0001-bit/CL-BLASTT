@@ -544,4 +544,5 @@ if __name__ == "__main__":
     print("|  CLBlast local server  - port 5000   |")
     print("|  Open clblast.html in your browser   |")
     print("+--------------------------------------+")
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
