@@ -1,16 +1,11 @@
 FROM python:3.12-slim
-
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
-
-# Unset any proxy vars that Railway might inject during build
-# so apt can reach debian repos directly
 ARG http_proxy=
 ARG https_proxy=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     chromium-driver \
@@ -32,13 +27,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-ENV DISPLAY=:99
+RUN mkdir -p /dev/shm && chmod 1777 /dev/shm
 
-# Wrapper script so chromedriver always starts with --allowed-origins=*
+ENV DISPLAY=:99
 RUN printf '#!/bin/sh\nexec /usr/bin/chromedriver --allowed-ips="" --allowed-origins="*" "$@"\n' \
     > /usr/local/bin/chromedriver \
     && chmod +x /usr/local/bin/chromedriver
-
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
