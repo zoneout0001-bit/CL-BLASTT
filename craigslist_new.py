@@ -3155,24 +3155,58 @@ def post_product(driver, ad_name, product):
     if "s=area" not in cur and "copyfromanother" not in cur:
         print(f"  [city] Already past area page")
     else:
-        # If on copyfromanother, skip it first
+        # If on copyfromanother, click the "skip" button
+        # The page shows: [skip]  [re-use selected data]
+        # We always click "skip" so we get a clean new post, not a copy.
         if "copyfromanother" in driver.current_url:
-            try:
-                skip = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH,
-                        "//button[normalize-space(.)='skip'] | //input[@value='skip']")))
-                driver.execute_script("arguments[0].click();", skip)
-                human_delay(2, 3)
-                print(f"  [city] Skipped copy page -> {driver.current_url}")
-            except Exception:
+            dismissed = False
+
+            # Priority 1: click the literal "skip" button (confirmed in screenshot)
+            for skip_selector in [
+                (By.XPATH, "//button[normalize-space(translate(.,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'))='skip']"),
+                (By.XPATH, "//input[@value='skip' or @value='Skip']"),
+                (By.CSS_SELECTOR, "button.skip, input[value='skip']"),
+                (By.LINK_TEXT, "skip"),
+            ]:
                 try:
-                    cont = WebDriverWait(driver, 5).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR,
-                            "button[type='submit'], button.go")))
-                    driver.execute_script("arguments[0].click();", cont)
+                    skip_btn = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable(skip_selector))
+                    driver.execute_script("arguments[0].click();", skip_btn)
                     human_delay(2, 3)
-                except Exception as ce:
-                    print(f"  [city] Could not leave copy page: {ce}")
+                    dismissed = True
+                    print(f"  [city] Clicked 'skip' on copy page -> {driver.current_url}")
+                    break
+                except Exception:
+                    pass
+
+            # Priority 2: any button whose text contains 'skip'
+            if not dismissed:
+                try:
+                    all_btns = driver.find_elements(By.TAG_NAME, "button")
+                    all_btns += driver.find_elements(By.CSS_SELECTOR, "input[type='submit'], input[type='button']")
+                    for btn in all_btns:
+                        txt = (btn.text or btn.get_attribute("value") or "").strip().lower()
+                        if "skip" in txt:
+                            driver.execute_script("arguments[0].click();", btn)
+                            human_delay(2, 3)
+                            dismissed = True
+                            print(f"  [city] Clicked skip button (text scan) -> {driver.current_url}")
+                            break
+                except Exception:
+                    pass
+
+            # Priority 3: extract URL token and jump directly to ?s=area
+            if not dismissed:
+                import re as _re
+                m = _re.search(r'/k/([^/]+)/([^?]+)', driver.current_url)
+                if m:
+                    area_url = f"https://post.craigslist.org/k/{m.group(1)}/{m.group(2)}?s=area"
+                    print(f"  [city] Skip btn not found — jumping to area page: {area_url}")
+                    driver.get(area_url)
+                    human_delay(2, 3)
+                    dismissed = True
+                else:
+                    print(f"  [city] Could not leave copy page — no token in URL")
 
         # Try city dropdown
         city_clicked = False
@@ -3229,16 +3263,49 @@ def post_product(driver, ad_name, product):
     handle_captcha_if_present(driver)
     human_delay(2, 4)
 
+    # -- Handle ?s=subarea page (must submit before reaching ?s=type) ----------
+    for _sub_attempt in range(4):
+        if "s=subarea" not in driver.current_url:
+            break
+        print(f"  [subarea] On subarea page: {driver.current_url}")
+        try:
+            sub_submit = WebDriverWait(driver, 8).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR,
+                    "button[type='submit'], input[type='submit'], button.go, button.pickbutton")))
+            driver.execute_script("arguments[0].click();", sub_submit)
+            human_delay(2, 4)
+            handle_captcha_if_present(driver)
+            print(f"  [subarea] Submitted -> {driver.current_url}")
+        except Exception as sub_e:
+            print(f"  [subarea] Could not submit: {sub_e}")
+            # Fallback: extract token and jump directly to ?s=type
+            import re as _re
+            m = _re.search(r'/k/([^/]+)/([^?]+)', driver.current_url)
+            if m:
+                type_url = f"https://post.craigslist.org/k/{m.group(1)}/{m.group(2)}?s=type"
+                print(f"  [subarea] Jumping to type page: {type_url}")
+                driver.get(type_url)
+                human_delay(3, 5)
+            break
+    # --------------------------------------------------------------------------
+
     # -- Post type -------------------------------------------------------------
+    # Wait for ?s=type page — must NOT be on subarea anymore
     try:
         WebDriverWait(driver, 15).until(
-            lambda d: d.find_elements(By.CSS_SELECTOR, "input[value='fso']") or
-                      d.find_elements(By.CSS_SELECTOR, "input[type='radio']"))
+            lambda d: "s=subarea" not in d.current_url and (
+                d.find_elements(By.CSS_SELECTOR, "input[value='fso']") or
+                d.find_elements(By.CSS_SELECTOR, "input[value='fs']") or
+                d.find_elements(By.TAG_NAME, "li")
+            ))
         print("  [OK] Post type page loaded")
     except TimeoutException:
+        print(f"  [FAIL] Post type page not reached. URL: {driver.current_url}")
         return False
 
     fso_clicked = False
+
+    # Method 1: radio input with known fso values
     for val in ['fso', 'fs', 'forsale', 'sss']:
         try:
             el = driver.find_element(By.CSS_SELECTOR, f"input[value='{val}']")
@@ -3248,8 +3315,56 @@ def post_product(driver, ad_name, product):
             break
         except NoSuchElementException:
             pass
+
+    # Method 2: li / label / a containing 'for sale by owner'
+    # Uses JS innerText — headless Chrome returns empty el.text when
+    # text is inside a child <a> tag (the copy-flow ?s=type DOM).
     if not fso_clicked:
-        print("  [FAIL] Could not find 'for sale by owner'")
+        for tag in ["li", "label", "a"]:
+            for el in driver.find_elements(By.TAG_NAME, tag):
+                try:
+                    txt = el.text.strip()
+                    if not txt:
+                        txt = driver.execute_script(
+                            "return (arguments[0].innerText||arguments[0].textContent||'').trim();", el)
+                    txt_low = txt.lower()
+                    if "sale by owner" in txt_low or ("for sale" in txt_low and len(txt_low) < 40):
+                        driver.execute_script("arguments[0].click();", el)
+                        fso_clicked = True
+                        print(f"  [OK] Selected post type via <{tag}>: '{txt}'")
+                        break
+                except Exception:
+                    pass
+            if fso_clicked:
+                break
+
+    # Method 3: XPath case-insensitive match on full DOM
+    if not fso_clicked:
+        try:
+            owner_el = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//*[contains(translate(normalize-space(.),"
+                    "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),"
+                    "'for sale by owner')]")))
+            driver.execute_script("arguments[0].click();", owner_el)
+            fso_clicked = True
+            print("  [OK] Selected post type via XPath 'for sale by owner'")
+        except Exception:
+            pass
+
+    if not fso_clicked:
+        print(f"  [FAIL] Could not find 'for sale by owner'. URL: {driver.current_url}")
+        # Debug dump
+        lis = driver.find_elements(By.TAG_NAME, "li")
+        print(f"  LI elements ({len(lis)}):")
+        for i, li in enumerate(lis[:15]):
+            txt = li.text.strip() or driver.execute_script(
+                "return (arguments[0].innerText||arguments[0].textContent||'').trim();", li)
+            print(f"    [{i}] '{txt}'")
+        inputs = driver.find_elements(By.TAG_NAME, "input")
+        print(f"  Input elements ({len(inputs)}):")
+        for i, inp in enumerate(inputs[:10]):
+            print(f"    [{i}] type={inp.get_attribute('type')} value={inp.get_attribute('value')}")
         return False
 
     human_delay(3, 5)
