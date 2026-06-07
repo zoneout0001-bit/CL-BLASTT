@@ -648,6 +648,8 @@ def make_driver(proxy_url=None):
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--single-process",
+        "--no-zygote",
+        "--disable-software-rasterizer",
         "--disable-gpu",
         f"--window-size={sw},{sh}",
         "--disable-setuid-sandbox",
