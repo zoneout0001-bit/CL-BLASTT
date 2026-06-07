@@ -647,6 +647,7 @@ def make_driver(proxy_url=None):
     chrome_args = [
         "--no-sandbox",
         "--disable-dev-shm-usage",
+        "--single-process",
         "--disable-gpu",
         f"--window-size={sw},{sh}",
         "--disable-setuid-sandbox",
