@@ -24,7 +24,8 @@ THE FIX (2 changes):
   3. Poll CDP perf log for Network.responseReceived matching CL's geo endpoint,
      then call Network.getResponseBody to get the signed token back.
 """
-
+import imaplib
+import email as email_lib
 import re
 import time
 import json
