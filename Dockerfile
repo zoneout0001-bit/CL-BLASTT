@@ -24,11 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     xclip \
     xdotool \
-    xvfb \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /dev/shm && chmod 1777 /dev/shm
-RUN echo 'tmpfs /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=256m 0 0' >> /etc/fstab
-ENV DISPLAY=:99
 RUN printf '#!/bin/sh\nexec /usr/bin/chromedriver --allowed-ips="" --allowed-origins="*" "$@"\n' \
     > /usr/local/bin/chromedriver \
     && chmod +x /usr/local/bin/chromedriver

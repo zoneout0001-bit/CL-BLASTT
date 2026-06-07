@@ -634,7 +634,7 @@ def make_driver(proxy_url=None):
     os.environ["SE_MANAGER_PATH"] = ""
     os.environ["WDM_SKIP_DOWNLOAD"] = "1"
     _ensure_xvfb()
-    use_headed = bool(os.environ.get("DISPLAY"))
+    use_headed = False  # Force headless on Railway
 
     if not proxy_url:
         proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
@@ -649,6 +649,8 @@ def make_driver(proxy_url=None):
         "--disable-dev-shm-usage",
         "--single-process",
         "--no-zygote",
+        "--headless=new",
+        "--remote-debugging-port=0",
         "--disable-software-rasterizer",
         "--disable-gpu",
         f"--window-size={sw},{sh}",
