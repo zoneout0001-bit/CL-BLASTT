@@ -24,8 +24,7 @@ THE FIX (2 changes):
   3. Poll CDP perf log for Network.responseReceived matching CL's geo endpoint,
      then call Network.getResponseBody to get the signed token back.
 """
-import imaplib
-import email as email_lib
+
 import re
 import time
 import json
@@ -634,11 +633,13 @@ def make_driver(proxy_url=None):
     os.environ["SE_MANAGER_PATH"] = ""
     os.environ["WDM_SKIP_DOWNLOAD"] = "1"
     _ensure_xvfb()
-    use_headed = False  # Force headless on Railway
-
+    # use_headed = bool(os.environ.get("DISPLAY"))
+    use_headed = bool(os.environ.get("DISPLAY")) or os.environ.get("FORCE_HEADED") == "1"
     if not proxy_url:
         proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-
+        # proxy_clean = proxy_url.replace("http://", "").replace("https://", "")
+        # options.add_argument(f"--proxy-server=http://{proxy_clean}")
+        # options.add_argument("--proxy-bypass-list=localhost,127.0.0.1")
     fp = random.choice(_FINGERPRINTS)
     sw, sh = fp["screen"]
     print(f"  [driver] Fingerprint: {fp['ua'][:60]}...")
@@ -647,11 +648,6 @@ def make_driver(proxy_url=None):
     chrome_args = [
         "--no-sandbox",
         "--disable-dev-shm-usage",
-        "--single-process",
-        "--no-zygote",
-        "--headless=new",
-        "--remote-debugging-port=0",
-        "--disable-software-rasterizer",
         "--disable-gpu",
         f"--window-size={sw},{sh}",
         "--disable-setuid-sandbox",
@@ -719,6 +715,17 @@ def make_driver(proxy_url=None):
     if not chromedriver_bin:
         try:
             from webdriver_manager.chrome import ChromeDriverManager
+
+            # Add before ChromeDriverManager().install()
+            lock_path = os.path.expanduser(r"~\.wdm\.wdm-lock-chromedriver-win64")
+            if os.path.exists(lock_path):
+                try:
+                    os.remove(lock_path)
+                    print("[driver] Removed stale wdm lock file.")
+                except Exception:
+                    pass
+
+            chromedriver_bin = ChromeDriverManager().install()
             chromedriver_bin = ChromeDriverManager().install()
             print(f"  [driver] Auto-installed chromedriver: {chromedriver_bin}")
         except Exception as wdm_err:
@@ -2394,7 +2401,7 @@ def fill_and_submit_with_wire(driver, product, zip_code, city_name, cl_email):
         print(f"  [payload] All form fields at submit time: {form_html}")
 
     # -- Wait to leave the edit page -------------------------------------------
-    deadline = time.time() + 15
+    deadline = time.time() + 35
     while time.time() < deadline:
         cur = driver.current_url
         if "s=edit" not in cur:
@@ -2668,60 +2675,6 @@ def _wait_for_images_page(driver, timeout=30):
 
 def complete_images_step(driver, product: dict):
      # -- FIX: Already on preview page (CL skipped images step) --
-    # Wait for editimage if we're not there yet
-    # Wait for editimage or preview after form submit
-    cur = driver.current_url
-    print(f"  [images] Checking URL: {cur}")
-    if "s=editimage" not in cur and "s=preview" not in cur:
-        print(f"  [images] Waiting for editimage/preview...")
-        try:
-            WebDriverWait(driver, 25).until(lambda d: (
-                "s=editimage" in d.current_url
-                or "s=preview" in d.current_url
-                or "s=images" in d.current_url
-                or "s=geoverify" in d.current_url
-                or d.find_elements(By.CSS_SELECTOR, "input[type='file']")
-                or "done with images" in (d.page_source or "").lower()
-            ))
-            print(f"  [images] Landed: {driver.current_url}")
-        except TimeoutException:
-            print(f"  [images] Timed out waiting: {driver.current_url}")
-        # Handle geoverify
-        if "s=geoverify" in driver.current_url:
-            print("  [images] Geoverify -- bypassing...")
-            for _ in range(3):
-                if _click_geoverify_button(driver): break
-                time.sleep(3)
-            try:
-                WebDriverWait(driver, 20).until(lambda d:
-                    "s=editimage" in d.current_url or "s=preview" in d.current_url
-                    or "s=images" in d.current_url)
-                print(f"  [images] Post-geoverify: {driver.current_url}")
-            except TimeoutException:
-                print(f"  [images] Post-geoverify timeout: {driver.current_url}")
-
-    if "s=editimage" not in driver.current_url and "s=preview" not in driver.current_url:
-        print(f"  [images] Waiting for editimage from: {driver.current_url}")
-        try:
-            WebDriverWait(driver, 25).until(lambda d: (
-                "s=editimage" in d.current_url or "s=preview" in d.current_url
-                or "s=images" in d.current_url or "s=geoverify" in d.current_url
-                or d.find_elements(By.CSS_SELECTOR, "input[type='file']")
-            ))
-            print(f"  [images] Landed: {driver.current_url}")
-        except TimeoutException:
-            print(f"  [images] Timed out: {driver.current_url}")
-        # Handle geoverify
-        if "s=geoverify" in driver.current_url:
-            print("  [images] Geoverify -- bypassing...")
-            for _ in range(3):
-                if _click_geoverify_button(driver): break
-                time.sleep(3)
-            try:
-                WebDriverWait(driver, 20).until(lambda d:
-                    "s=editimage" in d.current_url or "s=preview" in d.current_url)
-            except TimeoutException:
-                pass
     if "s=preview" in driver.current_url:
         print("  [images] Already on preview -- CL skipped images step [OK]")
         return True
@@ -3155,89 +3108,88 @@ def post_product(driver, ad_name, product):
     if "s=area" not in cur and "copyfromanother" not in cur:
         print(f"  [city] Already past area page")
     else:
-        # If on copyfromanother, click the "skip" button
-        # The page shows: [skip]  [re-use selected data]
-        # We always click "skip" so we get a clean new post, not a copy.
+        # If on copyfromanother, skip it first
         if "copyfromanother" in driver.current_url:
-            dismissed = False
-
-            # Priority 1: click the literal "skip" button (confirmed in screenshot)
-            for skip_selector in [
-                (By.XPATH, "//button[normalize-space(translate(.,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'))='skip']"),
-                (By.XPATH, "//input[@value='skip' or @value='Skip']"),
-                (By.CSS_SELECTOR, "button.skip, input[value='skip']"),
-                (By.LINK_TEXT, "skip"),
-            ]:
+            try:
+                skip = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH,
+                        "//button[normalize-space(.)='skip'] | //input[@value='skip']")))
+                driver.execute_script("arguments[0].click();", skip)
+                human_delay(2, 3)
+                print(f"  [city] Skipped copy page -> {driver.current_url}")
+            except Exception:
                 try:
-                    skip_btn = WebDriverWait(driver, 5).until(
-                        EC.element_to_be_clickable(skip_selector))
-                    driver.execute_script("arguments[0].click();", skip_btn)
+                    cont = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR,
+                            "button[type='submit'], button.go")))
+                    driver.execute_script("arguments[0].click();", cont)
                     human_delay(2, 3)
-                    dismissed = True
-                    print(f"  [city] Clicked 'skip' on copy page -> {driver.current_url}")
-                    break
-                except Exception:
-                    pass
+                except Exception as ce:
+                    print(f"  [city] Could not leave copy page: {ce}")
 
-            # Priority 2: any button whose text contains 'skip'
-            if not dismissed:
-                try:
-                    all_btns = driver.find_elements(By.TAG_NAME, "button")
-                    all_btns += driver.find_elements(By.CSS_SELECTOR, "input[type='submit'], input[type='button']")
-                    for btn in all_btns:
-                        txt = (btn.text or btn.get_attribute("value") or "").strip().lower()
-                        if "skip" in txt:
-                            driver.execute_script("arguments[0].click();", btn)
-                            human_delay(2, 3)
-                            dismissed = True
-                            print(f"  [city] Clicked skip button (text scan) -> {driver.current_url}")
-                            break
-                except Exception:
-                    pass
-
-            # Priority 3: extract URL token and jump directly to ?s=area
-            if not dismissed:
-                import re as _re
-                m = _re.search(r'/k/([^/]+)/([^?]+)', driver.current_url)
-                if m:
-                    area_url = f"https://post.craigslist.org/k/{m.group(1)}/{m.group(2)}?s=area"
-                    print(f"  [city] Skip btn not found — jumping to area page: {area_url}")
-                    driver.get(area_url)
-                    human_delay(2, 3)
-                    dismissed = True
-                else:
-                    print(f"  [city] Could not leave copy page — no token in URL")
-
-        # Try city dropdown
+        # City dropdown -- open it, click first item, then click target city
         city_clicked = False
+        target = CL_CITY.lower().replace(" ", "").replace("-", "")
         try:
+            # Open the jQuery UI dropdown button
             city_button = WebDriverWait(driver, 8).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "span#ui-id-1-button")))
+                EC.element_to_be_clickable((By.CSS_SELECTOR,
+                    "span.ui-selectmenu-button, span[id$='-button']")))
             driver.execute_script("arguments[0].click();", city_button)
-            human_delay(1, 2)
+            print("  [city] Dropdown opened")
+            human_delay(0.8, 1.2)
+
+            # Wait for menu items to appear
             menu_items = WebDriverWait(driver, 5).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul#ui-id-1-menu li")))
-            target = CL_CITY.lower().replace(" ", "").replace("-", "")
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR,
+                    "ul[id$='-menu'] li, ul.ui-selectmenu-menu li")))
+            print(f"  [city] {len(menu_items)} items in dropdown")
+
+            # Step 1: Click the first item (clears current chandigarh selection)
+            driver.execute_script("arguments[0].click();", menu_items[0])
+            first_txt = (menu_items[0].text.strip() or
+                         menu_items[0].get_attribute("textContent") or "").strip()
+            print(f"  [city] Clicked first item: '{first_txt}'")
+            human_delay(0.5, 0.8)
+
+            # Step 2: Re-open dropdown (re-find button to avoid stale element)
+            city_button = driver.find_element(By.CSS_SELECTOR,
+                "span.ui-selectmenu-button, span[id$='-button']")
+            driver.execute_script("arguments[0].click();", city_button)
+            human_delay(0.8, 1.2)
+            menu_items = WebDriverWait(driver, 5).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR,
+                    "ul[id$='-menu'] li, ul.ui-selectmenu-menu li")))
+
             for item in menu_items:
                 txt = (item.text.strip() or item.get_attribute("textContent") or "").strip()
-                if target in txt.lower().replace(" ", "") or txt.lower().replace(" ", "") in target:
+                txt_norm = txt.lower().replace(" ", "").replace("-", "")
+                if target in txt_norm or txt_norm in target:
                     driver.execute_script("arguments[0].click();", item)
                     city_clicked = True
-                    print(f"  [OK] Selected city: {txt}")
+                    print(f"  [OK] Selected city: '{txt}'")
                     break
+
             if not city_clicked:
-                available = [m.text.strip() for m in menu_items[:6]]
-                print(f"  [city] {CL_CITY} not found. Available: {available}")
-                if menu_items:
-                    driver.execute_script("arguments[0].click();", menu_items[0])
-                    city_clicked = True
-                    print(f"  [OK] Fallback city: {menu_items[0].text.strip()}")
-        except TimeoutException:
-            print(f"  [city] No dropdown at {driver.current_url} — skipping")
-            city_clicked = True
+                available = [m.text.strip() for m in menu_items[:8]]
+                print(f"  [city] '{CL_CITY}' not found. Available: {available}")
+
         except Exception as e:
             print(f"  [city] Dropdown error: {e}")
-            city_clicked = True
+
+        if not city_clicked:
+            print(f"  [FAIL] Could not select city '{CL_CITY}' -- aborting")
+            return False
+
+        # Verify selection
+        try:
+            selected_txt = driver.execute_script(
+                "var btn = document.querySelector('span.ui-selectmenu-button span, span[id$=\"-button\"] span');"
+                "return btn ? btn.textContent.trim() : '';"
+            )
+            print(f"  [city] Verified selected: '{selected_txt}'")
+        except Exception:
+            pass
 
         # Click continue
         try:
@@ -3263,88 +3215,125 @@ def post_product(driver, ad_name, product):
     handle_captcha_if_present(driver)
     human_delay(2, 4)
 
-    # -- Handle ?s=subarea page (must reach ?s=type before continuing) ----------
-    # The subarea submit button exists but clicking it sometimes has no effect
-    # (Los Angeles has no subareas). Best strategy: extract the URL token and
-    # navigate directly to ?s=type — this always works regardless of subarea state.
+    # -- Subarea selection (s=subarea) -----------------------------------------
+    # Some cities (e.g. Los Angeles) show a radio-button subarea page after area.
     if "s=subarea" in driver.current_url:
-        print(f"  [subarea] On subarea page, selecting first option and clicking continue...")
+        print(f"  [subarea] On subarea page: {driver.current_url}")
+        subarea_picked = False
+        desired_subarea = (os.environ.get("CL_SUBAREA") or "").strip().lower()
         try:
-            # JS se click karo -- stale reference se bachne ke liye
-            clicked = driver.execute_script("""
-                var radios = document.querySelectorAll('input[type="radio"]');
-                if (radios.length > 0) {
-                    radios[0].click();
-                    return 'clicked-radio-' + radios[0].value;
-                }
-                return 'no-radio';
-            """)
-            print(f"  [subarea] {clicked}")
-            human_delay(0.5, 1.0)
+            radios = WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located(
+                    (By.CSS_SELECTOR, "input[type='radio']")))
+            print(f"  [subarea] Found {len(radios)} radio options")
+            # Try to match desired subarea by label text, else pick first
+            picked = None
+            if desired_subarea:
+                for radio in radios:
+                    try:
+                        label = driver.execute_script(
+                            "var lbl=document.querySelector('label[for=\"'+arguments[0].id+'\"]');"
+                            "return lbl ? lbl.textContent.trim().toLowerCase() : '';", radio)
+                        if desired_subarea in label or label in desired_subarea:
+                            picked = radio
+                            print(f"  [subarea] Matched desired subarea: {label}")
+                            break
+                    except Exception:
+                        pass
+            if not picked:
+                picked = radios[0]
+                print(f"  [subarea] No match for '{desired_subarea}', picking first radio")
+            driver.execute_script("arguments[0].click();", picked)
+            subarea_picked = True
+        except TimeoutException:
+            print("  [subarea] No radio buttons found — trying continue anyway")
+            subarea_picked = True
+        except Exception as se:
+            print(f"  [subarea] Radio selection error: {se}")
+            subarea_picked = True
 
-            clicked_btn = driver.execute_script("""
-                var btn = document.querySelector('button[type="submit"], input[type="submit"], button.go, button.pickbutton');
-                if (btn) { btn.click(); return 'clicked-' + (btn.textContent || btn.value || 'btn').trim(); }
-                return 'no-btn';
-            """)
-            print(f"  [subarea] Continue: {clicked_btn}")
-            human_delay(3, 5)
-            print(f"  [subarea] After continue: {driver.current_url}")
-
-        except Exception as sub_e:
-            print(f"  [subarea] Error: {sub_e}")
-
-        # ?s=hood page handle karo (neighborhood selection -- subarea ke baad aata hai)
-        if "s=hood" in driver.current_url:
-            print(f"  [hood] Neighborhood page -- selecting first option and continuing...")
+        # Click continue
+        try:
+            cont = WebDriverWait(driver, 8).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR,
+                    "button.go, button[type='submit'], input[type='submit']")))
+            driver.execute_script("arguments[0].click();", cont)
+            print("  [subarea] Clicked continue")
             try:
-                clicked = driver.execute_script("""
-                    var radios = document.querySelectorAll('input[type="radio"]');
-                    if (radios.length > 0) { radios[0].click(); return 'clicked-' + radios[0].value; }
-                    return 'no-radio';
-                """)
-                print(f"  [hood] {clicked}")
-                human_delay(0.5, 1.0)
+                WebDriverWait(driver, 15).until(
+                    lambda d: "s=subarea" not in d.current_url)
+                print(f"  [subarea] Left subarea -> {driver.current_url}")
+            except TimeoutException:
+                print(f"  [subarea] Still on subarea: {driver.current_url}")
+        except Exception as ce:
+            print(f"  [subarea] No continue button: {ce}")
 
-                clicked_btn = driver.execute_script("""
-                    var btn = document.querySelector('button[type="submit"], input[type="submit"], button.go, button.pickbutton');
-                    if (btn) { btn.click(); return 'clicked-' + (btn.textContent || btn.value || 'btn').trim(); }
-                    return 'no-btn';
-                """)
-                print(f"  [hood] Continue: {clicked_btn}")
-                human_delay(3, 5)
-                print(f"  [hood] After continue: {driver.current_url}")
-            except Exception as hood_e:
-                print(f"  [hood] Error: {hood_e}")
+        if "s=subarea" in driver.current_url:
+            print(f"  [FAIL] Could not leave subarea: {driver.current_url}")
+            return False
 
-        # Agar abhi bhi subarea/hood pe hai to force navigate karo
-        if "s=subarea" in driver.current_url or "s=hood" in driver.current_url:
-            import re as _re
-            m = _re.search(r'/k/([^/]+)/([^?]+)', driver.current_url)
-            if m:
-                type_url = f"https://post.craigslist.org/k/{m.group(1)}/{m.group(2)}?s=type"
-                print(f"  [subarea] Still stuck, forcing navigate to: {type_url}")
-                driver.get(type_url)
-                human_delay(3, 5)
-    # --------------------------------------------------------------------------
+        handle_captcha_if_present(driver)
+        human_delay(2, 3)
+
+    # -- Geoverify / map page (s=geoverify) ------------------------------------
+    if "s=geoverify" in driver.current_url:
+        print(f"  [geoverify] On geoverify/map page: {driver.current_url}")
+        try:
+            # Optionally fill ZIP if field is present
+            _area_zip_gv = (os.environ.get("CL_ZIP") or "").strip()
+            if not _area_zip_gv:
+                _AREA_ZIPS_GV = {
+                    "losangeles": "90001", "newyork": "10001", "chicago": "60601",
+                    "houston": "77001", "phoenix": "85001", "sfbay": "94102",
+                    "sandiego": "92101", "seattle": "98101", "miami": "33101",
+                    "dallas": "75201", "denver": "80201", "atlanta": "30301",
+                    "boston": "02101", "portland": "97201",
+                }
+                _ck2 = CL_CITY.lower().replace(" ", "").replace("-", "")
+                _area_zip_gv = _AREA_ZIPS_GV.get(_ck2, "90001")
+
+            # Fill ZIP code field if it exists
+            try:
+                zip_field = driver.find_element(By.CSS_SELECTOR,
+                    "input[name='zip'], input[id='zip'], input[placeholder*='ZIP'], input[placeholder*='zip']")
+                zip_field.clear()
+                zip_field.send_keys(_area_zip_gv)
+                print(f"  [geoverify] Filled ZIP: {_area_zip_gv}")
+                human_delay(0.5, 1)
+            except NoSuchElementException:
+                print("  [geoverify] No ZIP field found, skipping")
+
+            # Click continue button
+            cont_gv = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR,
+                    "button.go, button[type='submit'], input[type='submit'], button#continue, button:not([disabled])")))
+            driver.execute_script("arguments[0].click();", cont_gv)
+            print("  [geoverify] Clicked continue on map page")
+            try:
+                WebDriverWait(driver, 15).until(
+                    lambda d: "s=geoverify" not in d.current_url)
+                print(f"  [geoverify] Left map page -> {driver.current_url}")
+            except TimeoutException:
+                print(f"  [geoverify] Still on geoverify: {driver.current_url}")
+        except Exception as gve:
+            print(f"  [geoverify] Error on map page: {gve}")
+
+        if "s=geoverify" in driver.current_url:
+            print("  [geoverify] Could not leave map page — continuing anyway")
+
+        handle_captcha_if_present(driver)
+        human_delay(2, 3)
 
     # -- Post type -------------------------------------------------------------
-    # Wait for ?s=type page — must NOT be on subarea anymore
     try:
         WebDriverWait(driver, 15).until(
-            lambda d: "s=subarea" not in d.current_url and (
-                d.find_elements(By.CSS_SELECTOR, "input[value='fso']") or
-                d.find_elements(By.CSS_SELECTOR, "input[value='fs']") or
-                d.find_elements(By.TAG_NAME, "li")
-            ))
+            lambda d: d.find_elements(By.CSS_SELECTOR, "input[value='fso']") or
+                      d.find_elements(By.CSS_SELECTOR, "input[type='radio']"))
         print("  [OK] Post type page loaded")
     except TimeoutException:
-        print(f"  [FAIL] Post type page not reached. URL: {driver.current_url}")
         return False
 
     fso_clicked = False
-
-    # Method 1: radio input with known fso values
     for val in ['fso', 'fs', 'forsale', 'sss']:
         try:
             el = driver.find_element(By.CSS_SELECTOR, f"input[value='{val}']")
@@ -3354,56 +3343,8 @@ def post_product(driver, ad_name, product):
             break
         except NoSuchElementException:
             pass
-
-    # Method 2: li / label / a containing 'for sale by owner'
-    # Uses JS innerText — headless Chrome returns empty el.text when
-    # text is inside a child <a> tag (the copy-flow ?s=type DOM).
     if not fso_clicked:
-        for tag in ["li", "label", "a"]:
-            for el in driver.find_elements(By.TAG_NAME, tag):
-                try:
-                    txt = el.text.strip()
-                    if not txt:
-                        txt = driver.execute_script(
-                            "return (arguments[0].innerText||arguments[0].textContent||'').trim();", el)
-                    txt_low = txt.lower()
-                    if "sale by owner" in txt_low or ("for sale" in txt_low and len(txt_low) < 40):
-                        driver.execute_script("arguments[0].click();", el)
-                        fso_clicked = True
-                        print(f"  [OK] Selected post type via <{tag}>: '{txt}'")
-                        break
-                except Exception:
-                    pass
-            if fso_clicked:
-                break
-
-    # Method 3: XPath case-insensitive match on full DOM
-    if not fso_clicked:
-        try:
-            owner_el = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.XPATH,
-                    "//*[contains(translate(normalize-space(.),"
-                    "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),"
-                    "'for sale by owner')]")))
-            driver.execute_script("arguments[0].click();", owner_el)
-            fso_clicked = True
-            print("  [OK] Selected post type via XPath 'for sale by owner'")
-        except Exception:
-            pass
-
-    if not fso_clicked:
-        print(f"  [FAIL] Could not find 'for sale by owner'. URL: {driver.current_url}")
-        # Debug dump
-        lis = driver.find_elements(By.TAG_NAME, "li")
-        print(f"  LI elements ({len(lis)}):")
-        for i, li in enumerate(lis[:15]):
-            txt = li.text.strip() or driver.execute_script(
-                "return (arguments[0].innerText||arguments[0].textContent||'').trim();", li)
-            print(f"    [{i}] '{txt}'")
-        inputs = driver.find_elements(By.TAG_NAME, "input")
-        print(f"  Input elements ({len(inputs)}):")
-        for i, inp in enumerate(inputs[:10]):
-            print(f"    [{i}] type={inp.get_attribute('type')} value={inp.get_attribute('value')}")
+        print("  [FAIL] Could not find 'for sale by owner'")
         return False
 
     human_delay(3, 5)
