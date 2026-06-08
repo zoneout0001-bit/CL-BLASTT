@@ -3365,11 +3365,56 @@ def post_product(driver, ad_name, product):
         handle_captcha_if_present(driver)
         human_delay(2, 3)
 
+    # -- Hood / neighborhood page (s=hood) ------------------------------------
+    # CL shows this after subarea on some cities -- pick first option and continue
+    if "s=hood" in driver.current_url:
+        print(f"  [hood] On neighborhood page: {driver.current_url}")
+        try:
+            radios = WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located(
+                    (By.CSS_SELECTOR, "input[type='radio']")))
+            print(f"  [hood] Found {len(radios)} neighborhood options")
+            # Pick first radio
+            driver.execute_script("arguments[0].click();", radios[0])
+            print("  [hood] Picked first neighborhood")
+        except TimeoutException:
+            print("  [hood] No radio buttons found -- trying continue anyway")
+        except Exception as he:
+            print(f"  [hood] Radio error: {he}")
+
+        try:
+            cont = WebDriverWait(driver, 8).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR,
+                    "button.go, button[type='submit'], input[type='submit']")))
+            driver.execute_script("arguments[0].click();", cont)
+            print("  [hood] Clicked continue")
+            try:
+                WebDriverWait(driver, 15).until(
+                    lambda d: "s=hood" not in d.current_url)
+                print(f"  [hood] Left hood page -> {driver.current_url}")
+            except TimeoutException:
+                print(f"  [hood] Still on hood: {driver.current_url}")
+        except Exception as ce:
+            print(f"  [hood] No continue button: {ce}")
+
+        if "s=hood" in driver.current_url:
+            print("  [hood] Could not leave hood page -- continuing anyway")
+
+        handle_captcha_if_present(driver)
+        human_delay(2, 3)
+
     # -- Post type -------------------------------------------------------------
+    # Wait specifically for fso radio OR a page that has post-type-like values
+    # Do NOT trigger on s=hood (neighborhood) page
     try:
         WebDriverWait(driver, 15).until(
             lambda d: d.find_elements(By.CSS_SELECTOR, "input[value='fso']") or
-                      d.find_elements(By.CSS_SELECTOR, "input[type='radio']"))
+                      "s=posttype" in d.current_url or
+                      "s=type" in d.current_url or
+                      (d.find_elements(By.CSS_SELECTOR, "input[type='radio']")
+                       and "s=hood" not in d.current_url
+                       and "s=subarea" not in d.current_url
+                       and "s=geoverify" not in d.current_url))
         print("  [OK] Post type page loaded")
     except TimeoutException:
         return False
@@ -3416,18 +3461,43 @@ def post_product(driver, ad_name, product):
         except Exception as e:
             print(f"  [post-type] Label search failed: {e}")
 
-    # Fallback: click first visible radio on page
+    # Fallback: click first visible radio on page (re-find fresh to avoid stale)
     if not fso_clicked:
         try:
-            radios = driver.find_elements(By.CSS_SELECTOR, "input[type='radio']")
-            for r in radios:
-                if r.is_displayed() and r.is_enabled():
-                    driver.execute_script("arguments[0].click();", r)
-                    fso_clicked = True
-                    print(f"  [OK] Selected post type via first radio (value='{r.get_attribute('value')}')")
-                    break
+            radios = WebDriverWait(driver, 5).until(
+                EC.presence_of_all_elements_located(
+                    (By.CSS_SELECTOR, "input[type='radio']")))
+            for idx2, r in enumerate(radios):
+                try:
+                    val = r.get_attribute('value') or ''
+                    displayed = driver.execute_script(
+                        'return arguments[0].offsetParent !== null;', r)
+                    if displayed:
+                        driver.execute_script('arguments[0].click();', r)
+                        fso_clicked = True
+                        print(f'  [OK] Selected post type via first visible radio (value={val!r}, index={idx2})')
+                        break
+                except Exception:
+                    continue
         except Exception as e:
-            print(f"  [post-type] First radio fallback failed: {e}")
+            print(f'  [post-type] First radio fallback failed: {e}')
+
+    # Last resort: pure JS click
+    if not fso_clicked:
+        try:
+            _js_click = (
+                'var radios=document.querySelectorAll("input[type=\\"radio\\"]");'
+                'for(var i=0;i<radios.length;i++){'
+                '  if(radios[i].offsetParent!==null){radios[i].click();'
+                '    return "clicked-"+i+"-val-"+radios[i].value;}}'
+                'return "none-visible";'
+            )
+            result = driver.execute_script(_js_click)
+            print(f'  [post-type] JS last resort: {result}')
+            if result and result != 'none-visible':
+                fso_clicked = True
+        except Exception as e:
+            print(f'  [post-type] JS last resort failed: {e}')
 
     if not fso_clicked:
         print("  [FAIL] Could not find 'for sale by owner'")
@@ -3489,9 +3559,15 @@ def post_product(driver, ad_name, product):
                 "button.go.pickbutton, button[class*='pickbutton'], button[type='submit']")))
         driver.execute_script("arguments[0].click();", continue_btn)
         print("  [OK] Clicked category continue button")
+        # Wait until we leave s=cat AND s=type pages, landing on edit form
         try:
-            WebDriverWait(driver, 12).until(
-                EC.presence_of_element_located((By.ID, "postingForm")))
+            WebDriverWait(driver, 20).until(
+                lambda d: (
+                    d.find_elements(By.ID, 'postingForm') or
+                    ('s=cat' not in d.current_url and
+                     's=type' not in d.current_url and
+                     's=posttype' not in d.current_url)
+                ))
             time.sleep(2)
             print("  [OK] postingForm visible after category selection")
         except TimeoutException:
