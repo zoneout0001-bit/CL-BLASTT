@@ -671,12 +671,13 @@ def make_driver(proxy_url=None):
         "--metrics-recording-only",
         "--no-report-upload",
     ]
+    # Add headless only when no virtual display is available
     if not use_headed:
-        chrome_args.insert(3, "--headless=new")
+        chrome_args.append("--headless=new")
+    else:
+        print("  [driver] Headed mode (virtual display)")
     for arg in chrome_args:
         options.add_argument(arg)
-    if use_headed:
-        print("  [driver] Headed mode (virtual display)")
 
     if proxy_url:
         options.add_argument(f"--proxy-server={proxy_url}")
@@ -740,12 +741,11 @@ def make_driver(proxy_url=None):
 
     try:
         import undetected_chromedriver as uc
-        import subprocess, re as _re
-        # Auto-detect installed Chrome major version for uc compatibility
+        import subprocess as _sp, re as _re
         _uc_version = None
         try:
-            _ver_out = subprocess.check_output(
-                [chromium_bin or "chromium", "--version"], stderr=subprocess.DEVNULL
+            _ver_out = _sp.check_output(
+                [chromium_bin or "chromium", "--version"], stderr=_sp.DEVNULL
             ).decode()
             _m = _re.search(r"(\d+)\.\d+\.\d+", _ver_out)
             if _m:
