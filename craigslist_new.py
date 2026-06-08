@@ -740,12 +740,25 @@ def make_driver(proxy_url=None):
 
     try:
         import undetected_chromedriver as uc
+        import subprocess, re as _re
+        # Auto-detect installed Chrome major version for uc compatibility
+        _uc_version = None
+        try:
+            _ver_out = subprocess.check_output(
+                [chromium_bin or "chromium", "--version"], stderr=subprocess.DEVNULL
+            ).decode()
+            _m = _re.search(r"(\d+)\.\d+\.\d+", _ver_out)
+            if _m:
+                _uc_version = int(_m.group(1))
+                print(f"  [driver] Detected Chrome major version: {_uc_version}")
+        except Exception:
+            pass
         driver = uc.Chrome(
             options=options,
             driver_executable_path=chromedriver_bin,
             browser_executable_path=chromium_bin,
-            headless=not use_headed,
             use_subprocess=True,
+            **({"version_main": _uc_version} if _uc_version else {}),
         )
         print("  [driver] Using undetected-chromedriver")
     except Exception as uc_err:
