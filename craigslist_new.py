@@ -60,9 +60,12 @@ CL_PASSWORD    = os.environ.get("CL_PASSWORD",       "N.aruto07")  # CL account 
 _cl_logged_in: bool = False
 CL_CITY             = os.environ.get("CL_CITY", "losangeles")
 IS_FAST_MODE        = os.environ.get("FAST_MODE", "1") == "1"
-IS_RAILWAY          = any(os.path.exists(p) for p in [
-    "/usr/bin/chromium", "/usr/bin/chromium-browser",
-])
+IS_RAILWAY          = bool(
+    os.environ.get("RAILWAY_ENVIRONMENT") or
+    os.environ.get("RAILWAY_SERVICE_NAME") or
+    any(os.path.exists(p) for p in ["/usr/bin/chromium", "/usr/bin/chromium-browser"])
+)
+_xvfb_confirmed = False
 
 CATEGORY_MAPPING = {
     "antiques": (1, "antiques"), "appliances": (2, "appliances"),
@@ -160,7 +163,9 @@ def _find_binary(names, fallback_paths):
     return None
 
 def _ensure_xvfb():
+    global _xvfb_confirmed
     if os.environ.get("DISPLAY"):
+        _xvfb_confirmed = True
         return
     if not IS_RAILWAY and not shutil.which("Xvfb"):
         return
@@ -174,8 +179,17 @@ def _ensure_xvfb():
             stderr=subprocess.DEVNULL,
         )
         os.environ["DISPLAY"] = ":99"
-        time.sleep(1.0)
-        print("  [driver] Xvfb started (DISPLAY=:99)")
+        time.sleep(1.5)
+        # Verify Xvfb actually responding
+        test = subprocess.run(
+            ["xdpyinfo", "-display", ":99"],
+            capture_output=True, timeout=3
+        )
+        if test.returncode == 0:
+            _xvfb_confirmed = True
+            print("  [driver] Xvfb started and confirmed (DISPLAY=:99)")
+        else:
+            print("  [driver] Xvfb started but not responding -- will use headless")
     except Exception as e:
         print(f"  [driver] Xvfb unavailable: {e}")
 
@@ -633,7 +647,11 @@ def make_driver(proxy_url=None):
     os.environ["SE_MANAGER_PATH"] = ""
     os.environ["WDM_SKIP_DOWNLOAD"] = "1"
     _ensure_xvfb()
-    use_headed = bool(os.environ.get("DISPLAY"))
+    if IS_RAILWAY:
+        use_headed = False
+        print("  [driver] Railway detected -- forcing headless mode")
+    else:
+        use_headed = _xvfb_confirmed or bool(os.environ.get("DISPLAY"))
     # use_headed = bool(os.environ.get("DISPLAY")) or os.environ.get("FORCE_HEADED") == "1"
     if not proxy_url:
         proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
@@ -673,6 +691,9 @@ def make_driver(proxy_url=None):
         "--remote-debugging-port=0",
         "--disable-software-rasterizer",
         "--use-gl=swiftshader",
+        "--disable-background-networking",
+        "--disable-client-side-phishing-detection",
+        "--single-process",
     ]
 
     # Only add headless when no virtual display
@@ -682,8 +703,6 @@ def make_driver(proxy_url=None):
         print("  [driver] Headed mode (virtual display)")
     for arg in chrome_args:
         options.add_argument(arg)
-    if use_headed:
-        print("  [driver] Headed mode (virtual display)")
 
     if proxy_url:
         options.add_argument(f"--proxy-server={proxy_url}")
