@@ -3268,30 +3268,41 @@ def post_product(driver, ad_name, product):
     # (Los Angeles has no subareas). Best strategy: extract the URL token and
     # navigate directly to ?s=type — this always works regardless of subarea state.
     if "s=subarea" in driver.current_url:
-        import re as _re
-        m = _re.search(r'/k/([^/]+)/([^?]+)', driver.current_url)
-        if m:
-            type_url = f"https://post.craigslist.org/k/{m.group(1)}/{m.group(2)}?s=type"
-            print(f"  [subarea] Bypassing subarea -> navigating directly to: {type_url}")
-            driver.get(type_url)
+        print(f"  [subarea] On subarea page, selecting first option and clicking continue...")
+        try:
+            radio_buttons = driver.find_elements(By.CSS_SELECTOR, "input[type='radio']")
+            if radio_buttons:
+                driver.execute_script("arguments[0].click();", radio_buttons[0])
+                selected_val = radio_buttons[0].get_attribute("value")
+                print(f"  [subarea] Selected radio value='{selected_val}'")
+                human_delay(0.5, 1.0)
+            else:
+                print("  [subarea] No radio buttons found on subarea page")
+
+            sub_continue = WebDriverWait(driver, 8).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR,
+                    "button[type='submit'], input[type='submit'], button.go, button.pickbutton")))
+            driver.execute_script("arguments[0].click();", sub_continue)
             human_delay(3, 5)
-            handle_captcha_if_present(driver)
-            print(f"  [subarea] Now at: {driver.current_url}")
-        else:
-            # Token extraction failed — try button click as last resort
-            try:
-                sub_submit = WebDriverWait(driver, 8).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR,
-                        "button[type='submit'], input[type='submit'], button.go, button.pickbutton")))
-                url_before = driver.current_url
-                driver.execute_script("arguments[0].click();", sub_submit)
+            print(f"  [subarea] After continue: {driver.current_url}")
+
+            if "s=subarea" in driver.current_url:
+                import re as _re
+                m = _re.search(r'/k/([^/]+)/([^?]+)', driver.current_url)
+                if m:
+                    type_url = f"https://post.craigslist.org/k/{m.group(1)}/{m.group(2)}?s=type"
+                    print(f"  [subarea] Still stuck, forcing navigate to: {type_url}")
+                    driver.get(type_url)
+                    human_delay(3, 5)
+
+        except Exception as sub_e:
+            print(f"  [subarea] Error: {sub_e}")
+            import re as _re
+            m = _re.search(r'/k/([^/]+)/([^?]+)', driver.current_url)
+            if m:
+                type_url = f"https://post.craigslist.org/k/{m.group(1)}/{m.group(2)}?s=type"
+                driver.get(type_url)
                 human_delay(3, 5)
-                if driver.current_url == url_before:
-                    print(f"  [subarea] Button click had no effect — still stuck on subarea")
-                else:
-                    print(f"  [subarea] Button click worked -> {driver.current_url}")
-            except Exception as sub_e:
-                print(f"  [subarea] Could not submit and no token: {sub_e}")
     # --------------------------------------------------------------------------
 
     # -- Post type -------------------------------------------------------------
