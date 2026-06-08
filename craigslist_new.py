@@ -3061,9 +3061,11 @@ def post_product(driver, ad_name, product):
         print("  [OK] Clicked 'make new post'")
         human_delay(3, 5)
     except TimeoutException:
-        # Fallback: direct URL
-        print("  'make new post' not found -- falling back to direct URL")
-        driver.get("https://post.craigslist.org/c/sss")
+        # Fallback: city-specific direct URL so CL doesn't default to sfbay
+        city_slug = CL_CITY.lower().replace(" ", "").replace("-", "")
+        fallback_url = f"https://{city_slug}.craigslist.org/post/fs/sss"
+        print(f"  'make new post' not found -- falling back to {fallback_url}")
+        driver.get(fallback_url)
         human_delay(4, 7)
 
     handle_captcha_if_present(driver)
@@ -3372,8 +3374,25 @@ def post_product(driver, ad_name, product):
     except TimeoutException:
         return False
 
+    # -- Dump all radio options for diagnosis ---------------------------------
+    try:
+        radio_dump = driver.execute_script("""
+            var r = [];
+            document.querySelectorAll('input[type="radio"]').forEach(function(el) {
+                var lbl = document.querySelector('label[for="' + el.id + '"]');
+                r.push({value: el.value, id: el.id,
+                        label: lbl ? lbl.textContent.trim() : ''});
+            });
+            return r;
+        """)
+        print(f"  [post-type] Available radio options: {radio_dump}")
+    except Exception:
+        pass
+
     fso_clicked = False
-    for val in ['fso', 'fs', 'forsale', 'sss']:
+
+    # Try by input value first
+    for val in ['fso', 'fs', 'forsale', 'sss', 'for-sale', 'sale']:
         try:
             el = driver.find_element(By.CSS_SELECTOR, f"input[value='{val}']")
             driver.execute_script("arguments[0].click();", el)
@@ -3382,6 +3401,34 @@ def post_product(driver, ad_name, product):
             break
         except NoSuchElementException:
             pass
+
+    # Fallback: find by label text containing 'for sale'
+    if not fso_clicked:
+        try:
+            labels = driver.find_elements(By.CSS_SELECTOR, "label")
+            for lbl in labels:
+                txt = (lbl.text or "").lower().strip()
+                if "for sale" in txt or "forsale" in txt:
+                    driver.execute_script("arguments[0].click();", lbl)
+                    fso_clicked = True
+                    print(f"  [OK] Selected post type via label text: '{lbl.text.strip()}'")
+                    break
+        except Exception as e:
+            print(f"  [post-type] Label search failed: {e}")
+
+    # Fallback: click first visible radio on page
+    if not fso_clicked:
+        try:
+            radios = driver.find_elements(By.CSS_SELECTOR, "input[type='radio']")
+            for r in radios:
+                if r.is_displayed() and r.is_enabled():
+                    driver.execute_script("arguments[0].click();", r)
+                    fso_clicked = True
+                    print(f"  [OK] Selected post type via first radio (value='{r.get_attribute('value')}')")
+                    break
+        except Exception as e:
+            print(f"  [post-type] First radio fallback failed: {e}")
+
     if not fso_clicked:
         print("  [FAIL] Could not find 'for sale by owner'")
         return False
