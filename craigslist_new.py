@@ -3270,37 +3270,60 @@ def post_product(driver, ad_name, product):
     if "s=subarea" in driver.current_url:
         print(f"  [subarea] On subarea page, selecting first option and clicking continue...")
         try:
-            radio_buttons = driver.find_elements(By.CSS_SELECTOR, "input[type='radio']")
-            if radio_buttons:
-                driver.execute_script("arguments[0].click();", radio_buttons[0])
-                selected_val = radio_buttons[0].get_attribute("value")
-                print(f"  [subarea] Selected radio value='{selected_val}'")
-                human_delay(0.5, 1.0)
-            else:
-                print("  [subarea] No radio buttons found on subarea page")
+            # JS se click karo -- stale reference se bachne ke liye
+            clicked = driver.execute_script("""
+                var radios = document.querySelectorAll('input[type="radio"]');
+                if (radios.length > 0) {
+                    radios[0].click();
+                    return 'clicked-radio-' + radios[0].value;
+                }
+                return 'no-radio';
+            """)
+            print(f"  [subarea] {clicked}")
+            human_delay(0.5, 1.0)
 
-            sub_continue = WebDriverWait(driver, 8).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR,
-                    "button[type='submit'], input[type='submit'], button.go, button.pickbutton")))
-            driver.execute_script("arguments[0].click();", sub_continue)
+            clicked_btn = driver.execute_script("""
+                var btn = document.querySelector('button[type="submit"], input[type="submit"], button.go, button.pickbutton');
+                if (btn) { btn.click(); return 'clicked-' + (btn.textContent || btn.value || 'btn').trim(); }
+                return 'no-btn';
+            """)
+            print(f"  [subarea] Continue: {clicked_btn}")
             human_delay(3, 5)
             print(f"  [subarea] After continue: {driver.current_url}")
 
-            if "s=subarea" in driver.current_url:
-                import re as _re
-                m = _re.search(r'/k/([^/]+)/([^?]+)', driver.current_url)
-                if m:
-                    type_url = f"https://post.craigslist.org/k/{m.group(1)}/{m.group(2)}?s=type"
-                    print(f"  [subarea] Still stuck, forcing navigate to: {type_url}")
-                    driver.get(type_url)
-                    human_delay(3, 5)
-
         except Exception as sub_e:
             print(f"  [subarea] Error: {sub_e}")
+
+        # ?s=hood page handle karo (neighborhood selection -- subarea ke baad aata hai)
+        if "s=hood" in driver.current_url:
+            print(f"  [hood] Neighborhood page -- selecting first option and continuing...")
+            try:
+                clicked = driver.execute_script("""
+                    var radios = document.querySelectorAll('input[type="radio"]');
+                    if (radios.length > 0) { radios[0].click(); return 'clicked-' + radios[0].value; }
+                    return 'no-radio';
+                """)
+                print(f"  [hood] {clicked}")
+                human_delay(0.5, 1.0)
+
+                clicked_btn = driver.execute_script("""
+                    var btn = document.querySelector('button[type="submit"], input[type="submit"], button.go, button.pickbutton');
+                    if (btn) { btn.click(); return 'clicked-' + (btn.textContent || btn.value || 'btn').trim(); }
+                    return 'no-btn';
+                """)
+                print(f"  [hood] Continue: {clicked_btn}")
+                human_delay(3, 5)
+                print(f"  [hood] After continue: {driver.current_url}")
+            except Exception as hood_e:
+                print(f"  [hood] Error: {hood_e}")
+
+        # Agar abhi bhi subarea/hood pe hai to force navigate karo
+        if "s=subarea" in driver.current_url or "s=hood" in driver.current_url:
             import re as _re
             m = _re.search(r'/k/([^/]+)/([^?]+)', driver.current_url)
             if m:
                 type_url = f"https://post.craigslist.org/k/{m.group(1)}/{m.group(2)}?s=type"
+                print(f"  [subarea] Still stuck, forcing navigate to: {type_url}")
                 driver.get(type_url)
                 human_delay(3, 5)
     # --------------------------------------------------------------------------
