@@ -633,8 +633,8 @@ def make_driver(proxy_url=None):
     os.environ["SE_MANAGER_PATH"] = ""
     os.environ["WDM_SKIP_DOWNLOAD"] = "1"
     _ensure_xvfb()
-    # use_headed = bool(os.environ.get("DISPLAY"))
-    use_headed = bool(os.environ.get("DISPLAY")) or os.environ.get("FORCE_HEADED") == "1"
+    use_headed = bool(os.environ.get("DISPLAY"))
+    # use_headed = bool(os.environ.get("DISPLAY")) or os.environ.get("FORCE_HEADED") == "1"
     if not proxy_url:
         proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
         # proxy_clean = proxy_url.replace("http://", "").replace("https://", "")
